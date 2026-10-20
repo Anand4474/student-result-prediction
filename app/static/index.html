@@ -1,0 +1,172 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Result Prediction Dashboard</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f1f5f9;color:#172033;font-family:Arial,sans-serif}
+header{background:#172554;color:white;padding:24px}
+header h1{margin:0 0 8px}
+main{max-width:1200px;margin:auto;padding:24px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}
+.card{background:white;padding:22px;border-radius:14px;box-shadow:0 3px 12px #0000000c;margin-bottom:20px}
+.stat{font-size:30px;font-weight:bold;margin-top:10px}
+label{display:block;margin:14px 0 7px;font-weight:bold}
+input{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:8px}
+button{border:0;border-radius:8px;padding:12px 16px;background:#4f46e5;color:white;cursor:pointer;margin-top:14px;font-weight:bold}
+button:disabled{opacity:.6}
+.secondary{background:#0f766e}
+.message{margin-top:12px;white-space:pre-wrap}
+table{width:100%;border-collapse:collapse;min-width:650px}
+th,td{text-align:left;padding:12px;border-bottom:1px solid #e2e8f0}
+th{background:#f8fafc}
+.table-wrap{overflow-x:auto}
+.muted{color:#64748b}
+.pass{color:#15803d}
+.fail{color:#b91c1c}
+@media(max-width:700px){.grid{grid-template-columns:1fr}main{padding:12px}header{padding:18px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Student Result Prediction</h1>
+  <div>Dashboard · Performance Analysis · Prediction History</div>
+</header>
+<main>
+  <section class="grid">
+    <div class="card"><div class="muted">Total Predictions</div><div class="stat" id="total">0</div></div>
+    <div class="card"><div class="muted">Predicted Passes</div><div class="stat pass" id="passes">0</div></div>
+    <div class="card"><div class="muted">Needs Improvement</div><div class="stat fail" id="improve">0</div></div>
+  </section>
+
+  <section class="card">
+    <h2>Predict Student Result</h2>
+    <form id="form">
+      <label for="hours">Study hours per day (0–24)</label>
+      <input id="hours" type="number" min="0" max="24" step="0.1" required placeholder="Example: 5">
+      <label for="attendance">Attendance percentage (0–100)</label>
+      <input id="attendance" type="number" min="0" max="100" step="0.1" required placeholder="Example: 85">
+      <button id="predict" type="submit">Predict Result</button>
+    </form>
+    <div id="result" class="message" role="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>Prediction History</h2>
+    <button id="refresh" type="button">Refresh History</button>
+    <button id="export" type="button" class="secondary">Download CSV</button>
+    <p id="historyMessage" class="muted"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Timestamp</th><th>Study Hours</th><th>Attendance</th>
+          <th>Prediction</th><th>Pass Probability</th><th>Status</th>
+        </tr></thead>
+        <tbody id="records"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  <p class="muted">Predictions are estimates, not guarantees of actual academic results.</p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+
+function safe(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[c]);
+}
+
+function passed(record) {
+  return ["true","1","yes"].includes(String(record.passed).toLowerCase());
+}
+
+function percent(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "N/A";
+}
+
+async function loadHistory() {
+  $("historyMessage").textContent = "Loading history...";
+  try {
+    const response = await fetch("/history");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Unable to load history");
+
+    $("total").textContent = data.total ?? 0;
+    $("passes").textContent = data.pass_count ?? 0;
+    $("improve").textContent = data.needs_improvement_count ?? 0;
+
+    const rows = Array.isArray(data.records) ? data.records : [];
+    if (!rows.length) {
+      $("records").innerHTML = '<tr><td colspan="6">No predictions yet. Submit the form above.</td></tr>';
+    } else {
+      $("records").innerHTML = rows.map(r => {
+        const ok = passed(r);
+        return `<tr>
+          <td>${safe(r.timestamp)}</td>
+          <td>${safe(r.study_hours)}</td>
+          <td>${safe(r.attendance)}%</td>
+          <td>${safe(r.prediction)}</td>
+          <td>${percent(r.pass_probability)}</td>
+          <td class="${ok ? "pass" : "fail"}">${ok ? "Pass" : "Needs Improvement"}</td>
+        </tr>`;
+      }).join("");
+    }
+    $("historyMessage").textContent = `Loaded ${rows.length} recent record(s).`;
+  } catch (error) {
+    $("historyMessage").textContent = "History error: " + error.message;
+    $("records").innerHTML = '<tr><td colspan="6">Could not load history. Check the backend.</td></tr>';
+  }
+}
+
+$("form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const hours = Number($("hours").value);
+  const attendance = Number($("attendance").value);
+  const button = $("predict");
+
+  if (hours < 0 || hours > 24 || attendance < 0 || attendance > 100) {
+    $("result").textContent = "Enter valid study hours (0–24) and attendance (0–100).";
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Predicting...";
+  $("result").textContent = "Sending data to the model...";
+
+  try {
+    const response = await fetch("/predict", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({study_hours:hours, attendance:attendance})
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Prediction failed");
+
+    $("result").innerHTML =
+      `<h3>Prediction: ${safe(data.prediction)}</h3>
+       <p>Pass probability: ${percent(data.pass_probability)}</p>
+       <p>${data.history_saved ? "Prediction saved to history." : "Prediction completed, but history could not be saved."}</p>
+       <p class="muted">${safe(data.note || "")}</p>`;
+    await loadHistory();
+  } catch (error) {
+    $("result").textContent = "Error: " + error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Predict Result";
+  }
+});
+
+$("refresh").addEventListener("click", loadHistory);
+$("export").addEventListener("click", () => {
+  window.location.href = "/history/export";
+});
+
+loadHistory();
+</script>
+</body>
+</html>
